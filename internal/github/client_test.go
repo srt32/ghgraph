@@ -383,6 +383,223 @@ func TestGetOrganization_NotFound(t *testing.T) {
 	}
 }
 
+func TestListUserRepositories_Success(t *testing.T) {
+	// Create mock repositories data
+	mockRepos := []*Repository{
+		{
+			ID:              1,
+			Name:            "repo1",
+			FullName:        "octocat/repo1",
+			Description:     stringPtr("First repo"),
+			Private:         false,
+			HTMLURL:         "https://github.com/octocat/repo1",
+			StargazersCount: 10,
+			ForksCount:      5,
+			DefaultBranch:   "main",
+			Owner: User{
+				ID:    583231,
+				Login: "octocat",
+			},
+		},
+		{
+			ID:              2,
+			Name:            "repo2",
+			FullName:        "octocat/repo2",
+			Description:     stringPtr("Second repo"),
+			Private:         true,
+			HTMLURL:         "https://github.com/octocat/repo2",
+			StargazersCount: 20,
+			ForksCount:      3,
+			DefaultBranch:   "main",
+			Owner: User{
+				ID:    583231,
+				Login: "octocat",
+			},
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/users/octocat/repos"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Verify query parameters
+		if r.URL.Query().Get("per_page") != "2" {
+			t.Errorf("Expected per_page=2, got %s", r.URL.Query().Get("per_page"))
+		}
+		if r.URL.Query().Get("page") != "1" {
+			t.Errorf("Expected page=1, got %s", r.URL.Query().Get("page"))
+		}
+
+		// Return mock repositories with pagination link
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", "<http://test/users/octocat/repos?page=2>; rel=\"next\", <http://test/users/octocat/repos?page=5>; rel=\"last\"")
+		json.NewEncoder(w).Encode(mockRepos)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListUserRepositories
+	result, err := client.ListUserRepositories("octocat", 2, nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if len(result.Repositories) != 2 {
+		t.Errorf("Expected 2 repositories, got %d", len(result.Repositories))
+	}
+	if result.HasNextPage != true {
+		t.Error("Expected HasNextPage to be true")
+	}
+	if result.HasPrevPage != false {
+		t.Error("Expected HasPrevPage to be false")
+	}
+	if result.EndCursor == nil {
+		t.Error("Expected EndCursor to be non-nil")
+	}
+	if result.Repositories[0].Name != "repo1" {
+		t.Errorf("Expected first repo name 'repo1', got '%s'", result.Repositories[0].Name)
+	}
+}
+
+func TestListUserRepositories_WithCursor(t *testing.T) {
+	// Create mock repositories data
+	mockRepos := []*Repository{
+		{
+			ID:       3,
+			Name:     "repo3",
+			FullName: "octocat/repo3",
+			Owner: User{
+				ID:    583231,
+				Login: "octocat",
+			},
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify page parameter is 2 (decoded from cursor)
+		if r.URL.Query().Get("page") != "2" {
+			t.Errorf("Expected page=2, got %s", r.URL.Query().Get("page"))
+		}
+
+		// Return mock repositories without next link
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockRepos)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Create cursor for page 2
+	cursor := "Mg==" // base64 encoded "2"
+
+	// Call ListUserRepositories with cursor
+	result, err := client.ListUserRepositories("octocat", 1, &cursor)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if len(result.Repositories) != 1 {
+		t.Errorf("Expected 1 repository, got %d", len(result.Repositories))
+	}
+	if result.HasNextPage != false {
+		t.Error("Expected HasNextPage to be false")
+	}
+	if result.HasPrevPage != true {
+		t.Error("Expected HasPrevPage to be true")
+	}
+}
+
+func TestListUserRepositories_AuthenticatedUser(t *testing.T) {
+	// Create mock repositories data
+	mockRepos := []*Repository{
+		{
+			ID:       1,
+			Name:     "my-repo",
+			FullName: "myuser/my-repo",
+			Owner: User{
+				ID:    12345,
+				Login: "myuser",
+			},
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify endpoint is /user/repos (authenticated user)
+		expectedPath := "/user/repos"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Return mock repositories
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockRepos)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListUserRepositories with empty login (authenticated user)
+	result, err := client.ListUserRepositories("", 30, nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if len(result.Repositories) != 1 {
+		t.Errorf("Expected 1 repository, got %d", len(result.Repositories))
+	}
+	if result.Repositories[0].Name != "my-repo" {
+		t.Errorf("Expected repo name 'my-repo', got '%s'", result.Repositories[0].Name)
+	}
+}
+
+func TestListUserRepositories_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListUserRepositories
+	_, err := client.ListUserRepositories("nonexistent", 30, nil)
+	if err == nil {
+		t.Fatal("Expected error for non-existent user, got nil")
+	}
+
+	// Verify error message
+	expectedMsg := "user not found: nonexistent"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

@@ -35,6 +35,10 @@ The following scalar fields are supported on the `User` type:
 - `bio` (String) - The user's bio
 - `company` (String) - The user's company
 - `location` (String) - The user's location
+- `repositories` (RepositoryConnection!) - A paginated list of repositories owned by the user
+  - Arguments:
+    - `first` (Int) - Number of repositories to return (default: 30)
+    - `after` (String) - Cursor to start after for pagination
 
 ### Repository Fields
 
@@ -63,6 +67,35 @@ The following fields are supported on the `Organization` type:
 - `url` (String!) - The HTTP URL for this organization
 - `email` (String) - The organization's public email
 - `location` (String) - The organization's location
+
+### Pagination Types
+
+The following types are used for cursor-based pagination:
+
+#### PageInfo
+
+Contains pagination metadata:
+
+- `hasNextPage` (Boolean!) - Are there more items when paginating forward?
+- `hasPreviousPage` (Boolean!) - Are there more items when paginating backward?
+- `startCursor` (String) - Cursor to continue from the start
+- `endCursor` (String) - Cursor to continue from the end
+
+#### RepositoryConnection
+
+Represents a paginated list of repositories:
+
+- `edges` ([RepositoryEdge]) - List of edges containing repositories and cursors
+- `nodes` ([Repository]) - Direct list of repositories
+- `pageInfo` (PageInfo!) - Pagination information
+- `totalCount` (Int!) - Total number of repositories in this result set
+
+#### RepositoryEdge
+
+Represents an edge in a repository connection:
+
+- `cursor` (String!) - Cursor for this edge
+- `node` (Repository) - The repository at this edge
 
 ## Installation
 
@@ -161,6 +194,51 @@ curl -X POST http://localhost:8080/graphql \
   }'
 ```
 
+#### Example: Query User Repositories with Pagination
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ viewer { login repositories(first: 5) { totalCount pageInfo { hasNextPage endCursor } nodes { name description stargazerCount } } } }"
+  }'
+```
+
+#### Example: Paginate Through Repositories
+
+```bash
+# First page
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ viewer { repositories(first: 2) { pageInfo { hasNextPage endCursor } edges { cursor node { name } } } } }"
+  }'
+
+# Next page (use endCursor from previous response)
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query($cursor: String!) { viewer { repositories(first: 2, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { name } } } }",
+    "variables": {
+      "cursor": "Mg=="
+    }
+  }'
+```
+
+#### Example: Query Another User's Repositories
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ user(login: \"octocat\") { login repositories(first: 10) { totalCount nodes { name stargazerCount } } } }"
+  }'
+```
+
 ### Health Check
 
 ```bash
@@ -240,11 +318,16 @@ ghgraph/
 
 ## Roadmap
 
+### Completed
+
+- [x] Add more root queries (`user`, `repository`, `organization`)
+- [x] Add support for nested queries (e.g., `viewer.repositories`, `user.repositories`)
+- [x] Implement cursor-based pagination for list fields
+- [x] Support for repository connections with edges, nodes, and pageInfo
+
 ### Next Steps
 
-- [ ] Add support for nested queries (e.g., `viewer.repositories`)
-- [ ] Implement pagination for list fields
-- [ ] Add more root queries (e.g., `user`, `repository`, `organization`)
+- [ ] Add more paginated fields (e.g., `user.followers`, `repository.issues`)
 - [ ] Support mutations
 - [ ] Add request caching
 - [ ] Implement rate limiting

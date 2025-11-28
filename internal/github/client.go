@@ -1,10 +1,14 @@
 package github
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -56,6 +60,16 @@ type Organization struct {
 	HTMLURL     string  `json:"html_url"`
 	Email       *string `json:"email"`
 	Location    *string `json:"location"`
+}
+
+// RepositoriesResult represents a paginated list of repositories
+type RepositoriesResult struct {
+	Repositories []*Repository
+	TotalCount   int
+	HasNextPage  bool
+	HasPrevPage  bool
+	EndCursor    *string
+	StartCursor  *string
 }
 
 // NewClient creates a new GitHub REST API client
@@ -204,4 +218,119 @@ func (c *Client) GetOrganization(login string) (*Organization, error) {
 	}
 
 	return &org, nil
+}
+
+// ListUserRepositories fetches repositories for a user with pagination support
+// If login is empty, fetches repositories for the authenticated user
+func (c *Client) ListUserRepositories(login string, first int, after *string) (*RepositoriesResult, error) {
+	// Decode cursor to get page number
+	page := 1
+	if after != nil && *after != "" {
+		decoded, err := base64.StdEncoding.DecodeString(*after)
+		if err == nil {
+			if p, err := strconv.Atoi(string(decoded)); err == nil && p > 0 {
+				page = p
+			}
+		}
+	}
+
+	// Determine endpoint
+	var endpoint string
+	if login == "" {
+		endpoint = fmt.Sprintf("%s/user/repos", c.baseURL)
+	} else {
+		endpoint = fmt.Sprintf("%s/users/%s/repos", c.baseURL, login)
+	}
+
+	// Build query parameters
+	params := url.Values{}
+	params.Set("per_page", strconv.Itoa(first))
+	params.Set("page", strconv.Itoa(page))
+	params.Set("sort", "updated")
+	params.Set("direction", "desc")
+
+	fullURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		if login == "" {
+			return nil, fmt.Errorf("authenticated user repositories not found")
+		}
+		return nil, fmt.Errorf("user not found: %s", login)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var repos []*Repository
+	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	// Parse Link header to determine pagination info
+	hasNextPage := false
+	hasPrevPage := page > 1
+	linkHeader := resp.Header.Get("Link")
+	if linkHeader != "" {
+		links := parseLinkHeader(linkHeader)
+		if _, ok := links["next"]; ok {
+			hasNextPage = true
+		}
+	}
+
+	// Create cursors
+	var startCursor, endCursor *string
+	if len(repos) > 0 {
+		start := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page)))
+		startCursor = &start
+		if hasNextPage {
+			end := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page + 1)))
+			endCursor = &end
+		}
+	}
+
+	return &RepositoriesResult{
+		Repositories: repos,
+		TotalCount:   len(repos), // REST API doesn't provide total count easily
+		HasNextPage:  hasNextPage,
+		HasPrevPage:  hasPrevPage,
+		EndCursor:    endCursor,
+		StartCursor:  startCursor,
+	}, nil
+}
+
+// parseLinkHeader parses the GitHub Link header format
+// Example: <https://api.github.com/user/repos?page=2>; rel="next", <https://api.github.com/user/repos?page=5>; rel="last"
+func parseLinkHeader(header string) map[string]string {
+	links := make(map[string]string)
+	parts := strings.Split(header, ",")
+	for _, part := range parts {
+		section := strings.Split(strings.TrimSpace(part), ";")
+		if len(section) != 2 {
+			continue
+		}
+		url := strings.Trim(strings.TrimSpace(section[0]), "<>")
+		rel := strings.Trim(strings.TrimSpace(section[1]), " ")
+		if strings.HasPrefix(rel, "rel=\"") {
+			rel = strings.Trim(rel[5:], "\"")
+			links[rel] = url
+		}
+	}
+	return links
 }

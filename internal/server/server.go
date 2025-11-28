@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -83,12 +84,16 @@ func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create context with GitHub client
+	ctx := context.WithValue(context.Background(), "githubClient", githubClient)
+
 	// Execute GraphQL query
 	result := graphql.Do(graphql.Params{
 		Schema:         schema,
 		RequestString:  req.Query,
 		VariableValues: req.Variables,
 		OperationName:  req.OperationName,
+		Context:        ctx,
 	})
 
 	// Set response headers

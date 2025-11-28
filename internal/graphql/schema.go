@@ -1,15 +1,49 @@
 package graphql
 
 import (
+	"encoding/base64"
+	"strconv"
+
 	"github.com/graphql-go/graphql"
 	"github.com/srt32/ghgraph/internal/github"
 )
+
+// pageInfoType represents pagination information
+var pageInfoType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "PageInfo",
+	Description: "Information about pagination in a connection.",
+	Fields: graphql.Fields{
+		"hasNextPage": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "When paginating forwards, are there more items?",
+		},
+		"hasPreviousPage": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "When paginating backwards, are there more items?",
+		},
+		"startCursor": &graphql.Field{
+			Type:        graphql.String,
+			Description: "When paginating backwards, the cursor to continue.",
+		},
+		"endCursor": &graphql.Field{
+			Type:        graphql.String,
+			Description: "When paginating forwards, the cursor to continue.",
+		},
+	},
+})
+
+// repositoryEdgeType represents an edge in a repository connection
+var repositoryEdgeType *graphql.Object
+
+// repositoryConnectionType represents a paginated list of repositories
+var repositoryConnectionType *graphql.Object
 
 // userType represents the GraphQL User type matching GitHub's schema
 var userType = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "User",
 	Description: "A user is an individual's account on GitHub that owns repositories and can make new content.",
-	Fields: graphql.Fields{
+	Fields: graphql.FieldsThunk(func() graphql.Fields {
+		return graphql.Fields{
 		"id": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "The Node ID of the User object",
@@ -96,7 +130,72 @@ var userType = graphql.NewObject(graphql.ObjectConfig{
 				return nil, nil
 			},
 		},
-	},
+		"repositories": &graphql.Field{
+			Type:        repositoryConnectionType,
+			Description: "A list of repositories that the user owns.",
+			Args: graphql.FieldConfigArgument{
+				"first": &graphql.ArgumentConfig{
+					Type:         graphql.Int,
+					Description:  "Returns the first n repositories from the list.",
+					DefaultValue: 30,
+				},
+				"after": &graphql.ArgumentConfig{
+					Type:        graphql.String,
+					Description: "Returns the repositories that come after the specified cursor.",
+				},
+			},
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				user, ok := p.Source.(*github.User)
+				if !ok {
+					return nil, nil
+				}
+
+				// Get arguments
+				first := p.Args["first"].(int)
+				var after *string
+				if afterVal, ok := p.Args["after"].(string); ok && afterVal != "" {
+					after = &afterVal
+				}
+
+				// Get GitHub client from context
+				githubClient, ok := p.Context.Value("githubClient").(*github.Client)
+				if !ok {
+					return nil, nil
+				}
+
+				// Fetch repositories
+				result, err := githubClient.ListUserRepositories(user.Login, first, after)
+				if err != nil {
+					return nil, err
+				}
+
+				// Build edges
+				edges := make([]map[string]interface{}, 0, len(result.Repositories))
+				for i, repo := range result.Repositories {
+					// Create cursor for this item
+					cursor := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(i)))
+					edges = append(edges, map[string]interface{}{
+						"cursor": cursor,
+						"node":   repo,
+					})
+				}
+
+				// Build connection
+				return map[string]interface{}{
+					"edges": edges,
+					"nodes": result.Repositories,
+					"pageInfo": map[string]interface{}{
+						"hasNextPage":     result.HasNextPage,
+						"hasPreviousPage": result.HasPrevPage,
+						"startCursor":     result.StartCursor,
+						"endCursor":       result.EndCursor,
+					},
+					"totalCount": result.TotalCount,
+				}, nil
+			},
+		},
+		}
+	}),
 })
 
 // repositoryType represents the GraphQL Repository type matching GitHub's schema
@@ -294,6 +393,84 @@ var organizationType = graphql.NewObject(graphql.ObjectConfig{
 		},
 	},
 })
+
+func init() {
+	// Initialize repositoryEdgeType with reference to repositoryType
+	repositoryEdgeType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RepositoryEdge",
+		Description: "An edge in a repository connection.",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "A cursor for use in pagination.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if edge, ok := p.Source.(map[string]interface{}); ok {
+						return edge["cursor"], nil
+					}
+					return nil, nil
+				},
+			},
+			"node": &graphql.Field{
+				Type:        repositoryType,
+				Description: "The item at the end of the edge.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if edge, ok := p.Source.(map[string]interface{}); ok {
+						return edge["node"], nil
+					}
+					return nil, nil
+				},
+			},
+		},
+	})
+
+	// Initialize repositoryConnectionType with references to edge and pageInfo
+	repositoryConnectionType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RepositoryConnection",
+		Description: "A list of repositories.",
+		Fields: graphql.Fields{
+			"edges": &graphql.Field{
+				Type:        graphql.NewList(repositoryEdgeType),
+				Description: "A list of edges.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if conn, ok := p.Source.(map[string]interface{}); ok {
+						return conn["edges"], nil
+					}
+					return nil, nil
+				},
+			},
+			"nodes": &graphql.Field{
+				Type:        graphql.NewList(repositoryType),
+				Description: "A list of nodes.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if conn, ok := p.Source.(map[string]interface{}); ok {
+						return conn["nodes"], nil
+					}
+					return nil, nil
+				},
+			},
+			"pageInfo": &graphql.Field{
+				Type:        graphql.NewNonNull(pageInfoType),
+				Description: "Information to aid in pagination.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if conn, ok := p.Source.(map[string]interface{}); ok {
+						return conn["pageInfo"], nil
+					}
+					return nil, nil
+				},
+			},
+			"totalCount": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Int),
+				Description: "Identifies the total count of items in the connection.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if conn, ok := p.Source.(map[string]interface{}); ok {
+						return conn["totalCount"], nil
+					}
+					return 0, nil
+				},
+			},
+		},
+	})
+}
 
 // NewSchema creates a new GraphQL schema
 func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
