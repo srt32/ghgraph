@@ -135,6 +135,84 @@ func TestGetAuthenticatedUser_NullableFields(t *testing.T) {
 	}
 }
 
+func TestGetUser_Success(t *testing.T) {
+	// Create mock user data
+	mockUser := User{
+		ID:        583231,
+		Login:     "octocat",
+		Name:      stringPtr("The Octocat"),
+		Email:     stringPtr("octocat@github.com"),
+		AvatarURL: "https://avatars.githubusercontent.com/u/583231",
+		Bio:       stringPtr("GitHub mascot"),
+		Company:   stringPtr("@github"),
+		Location:  stringPtr("San Francisco"),
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/users/octocat"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Return mock user
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockUser)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetUser
+	user, err := client.GetUser("octocat")
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if user.Login != mockUser.Login {
+		t.Errorf("Expected Login %s, got %s", mockUser.Login, user.Login)
+	}
+	if *user.Name != *mockUser.Name {
+		t.Errorf("Expected Name %s, got %s", *mockUser.Name, *user.Name)
+	}
+}
+
+func TestGetUser_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetUser
+	_, err := client.GetUser("nonexistent")
+	if err == nil {
+		t.Fatal("Expected error for non-existent user, got nil")
+	}
+
+	// Verify error message contains "not found"
+	expectedMsg := "user not found: nonexistent"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

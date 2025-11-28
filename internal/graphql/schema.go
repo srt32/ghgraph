@@ -111,6 +111,23 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 					return githubClient.GetAuthenticatedUser()
 				},
 			},
+			"user": &graphql.Field{
+				Type:        userType,
+				Description: "Lookup a user by login.",
+				Args: graphql.FieldConfigArgument{
+					"login": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The user's login.",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					login, ok := p.Args["login"].(string)
+					if !ok {
+						return nil, nil
+					}
+					return githubClient.GetUser(login)
+				},
+			},
 		},
 	})
 

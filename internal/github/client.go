@@ -77,3 +77,37 @@ func (c *Client) GetAuthenticatedUser() (*User, error) {
 
 	return &user, nil
 }
+
+// GetUser fetches a specific user by their login (username)
+func (c *Client) GetUser(login string) (*User, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/users/%s", c.baseURL, login), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("user not found: %s", login)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var user User
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &user, nil
+}

@@ -19,6 +19,7 @@ This project clones the GitHub GraphQL API interface but translates all queries 
 ### Queries
 
 - `viewer` - Returns the authenticated user
+- `user(login: String!)` - Lookup a user by login
 
 ### User Fields
 
@@ -94,6 +95,17 @@ curl -X POST http://localhost:8080/graphql \
   -d '{
     "query": "query GetUser { viewer { login email } }",
     "operationName": "GetUser"
+  }'
+```
+
+#### Example: Query Specific User
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ user(login: \"octocat\") { login name bio company } }"
   }'
 ```
 
