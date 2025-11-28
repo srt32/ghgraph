@@ -222,14 +222,34 @@ func (c *Client) GetOrganization(login string) (*Organization, error) {
 
 // ListUserRepositories fetches repositories for a user with pagination support
 // If login is empty, fetches repositories for the authenticated user
-func (c *Client) ListUserRepositories(login string, first int, after *string) (*RepositoriesResult, error) {
-	// Decode cursor to get page number
+// Supports both forward (first/after) and backward (last/before) pagination
+func (c *Client) ListUserRepositories(login string, first *int, after *string, last *int, before *string) (*RepositoriesResult, error) {
+	// Determine page size and number
+	perPage := 30 // default
 	page := 1
-	if after != nil && *after != "" {
-		decoded, err := base64.StdEncoding.DecodeString(*after)
-		if err == nil {
-			if p, err := strconv.Atoi(string(decoded)); err == nil && p > 0 {
-				page = p
+
+	// Forward pagination: first/after
+	if first != nil {
+		perPage = *first
+		if after != nil && *after != "" {
+			decoded, err := base64.StdEncoding.DecodeString(*after)
+			if err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 0 {
+					page = p
+				}
+			}
+		}
+	}
+
+	// Backward pagination: last/before
+	if last != nil {
+		perPage = *last
+		if before != nil && *before != "" {
+			decoded, err := base64.StdEncoding.DecodeString(*before)
+			if err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 1 {
+					page = p - 1 // Go to previous page
+				}
 			}
 		}
 	}
@@ -244,7 +264,7 @@ func (c *Client) ListUserRepositories(login string, first int, after *string) (*
 
 	// Build query parameters
 	params := url.Values{}
-	params.Set("per_page", strconv.Itoa(first))
+	params.Set("per_page", strconv.Itoa(perPage))
 	params.Set("page", strconv.Itoa(page))
 	params.Set("sort", "updated")
 	params.Set("direction", "desc")
@@ -307,7 +327,11 @@ func (c *Client) ListUserRepositories(login string, first int, after *string) (*
 
 	return &RepositoriesResult{
 		Repositories: repos,
-		TotalCount:   len(repos), // REST API doesn't provide total count easily
+		// NOTE: totalCount returns the count of items in the current page, not the total across all pages.
+		// GitHub's REST API doesn't provide a total count in the response, and we would need to
+		// parse the "last" rel from the Link header and multiply by per_page to estimate it,
+		// which would still be inaccurate. This matches the behavior of returning page-level counts.
+		TotalCount:   len(repos),
 		HasNextPage:  hasNextPage,
 		HasPrevPage:  hasPrevPage,
 		EndCursor:    endCursor,

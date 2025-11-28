@@ -1,12 +1,24 @@
 package graphql
 
 import (
+	"context"
 	"encoding/base64"
 	"strconv"
 
 	"github.com/graphql-go/graphql"
 	"github.com/srt32/ghgraph/internal/github"
 )
+
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const githubClientKey contextKey = "githubClient"
+
+// getClientFromContext retrieves the GitHub client from the request context
+func getClientFromContext(ctx context.Context) (*github.Client, bool) {
+	client, ok := ctx.Value(githubClientKey).(*github.Client)
+	return client, ok
+}
 
 // pageInfoType represents pagination information
 var pageInfoType = graphql.NewObject(graphql.ObjectConfig{
@@ -135,13 +147,20 @@ var userType = graphql.NewObject(graphql.ObjectConfig{
 			Description: "A list of repositories that the user owns.",
 			Args: graphql.FieldConfigArgument{
 				"first": &graphql.ArgumentConfig{
-					Type:         graphql.Int,
-					Description:  "Returns the first n repositories from the list.",
-					DefaultValue: 30,
+					Type:        graphql.Int,
+					Description: "Returns the first n repositories from the list.",
 				},
 				"after": &graphql.ArgumentConfig{
 					Type:        graphql.String,
 					Description: "Returns the repositories that come after the specified cursor.",
+				},
+				"last": &graphql.ArgumentConfig{
+					Type:        graphql.Int,
+					Description: "Returns the last n repositories from the list.",
+				},
+				"before": &graphql.ArgumentConfig{
+					Type:        graphql.String,
+					Description: "Returns the repositories that come before the specified cursor.",
 				},
 			},
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
@@ -150,21 +169,31 @@ var userType = graphql.NewObject(graphql.ObjectConfig{
 					return nil, nil
 				}
 
-				// Get arguments
-				first := p.Args["first"].(int)
-				var after *string
+				// Get pagination arguments
+				var first, last *int
+				var after, before *string
+
+				if firstVal, ok := p.Args["first"].(int); ok {
+					first = &firstVal
+				}
 				if afterVal, ok := p.Args["after"].(string); ok && afterVal != "" {
 					after = &afterVal
 				}
+				if lastVal, ok := p.Args["last"].(int); ok {
+					last = &lastVal
+				}
+				if beforeVal, ok := p.Args["before"].(string); ok && beforeVal != "" {
+					before = &beforeVal
+				}
 
 				// Get GitHub client from context
-				githubClient, ok := p.Context.Value("githubClient").(*github.Client)
+				githubClient, ok := getClientFromContext(p.Context)
 				if !ok {
 					return nil, nil
 				}
 
 				// Fetch repositories
-				result, err := githubClient.ListUserRepositories(user.Login, first, after)
+				result, err := githubClient.ListUserRepositories(user.Login, first, after, last, before)
 				if err != nil {
 					return nil, err
 				}
@@ -472,8 +501,15 @@ func init() {
 	})
 }
 
-// NewSchema creates a new GraphQL schema
-func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
+var cachedSchema graphql.Schema
+var schemaInitialized bool
+
+// GetSchema returns the GraphQL schema, creating it once on first call
+func GetSchema() (graphql.Schema, error) {
+	if schemaInitialized {
+		return cachedSchema, nil
+	}
+
 	queryType := graphql.NewObject(graphql.ObjectConfig{
 		Name: "Query",
 		Fields: graphql.Fields{
@@ -481,6 +517,10 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 				Type:        userType,
 				Description: "The currently authenticated user.",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					githubClient, ok := getClientFromContext(p.Context)
+					if !ok {
+						return nil, nil
+					}
 					return githubClient.GetAuthenticatedUser()
 				},
 			},
@@ -494,6 +534,10 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					githubClient, ok := getClientFromContext(p.Context)
+					if !ok {
+						return nil, nil
+					}
 					login, ok := p.Args["login"].(string)
 					if !ok {
 						return nil, nil
@@ -515,6 +559,10 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					githubClient, ok := getClientFromContext(p.Context)
+					if !ok {
+						return nil, nil
+					}
 					owner, ownerOk := p.Args["owner"].(string)
 					name, nameOk := p.Args["name"].(string)
 					if !ownerOk || !nameOk {
@@ -533,6 +581,10 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					githubClient, ok := getClientFromContext(p.Context)
+					if !ok {
+						return nil, nil
+					}
 					login, ok := p.Args["login"].(string)
 					if !ok {
 						return nil, nil
@@ -543,7 +595,20 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 		},
 	})
 
-	return graphql.NewSchema(graphql.SchemaConfig{
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
 		Query: queryType,
 	})
+	if err != nil {
+		return graphql.Schema{}, err
+	}
+
+	cachedSchema = schema
+	schemaInitialized = true
+	return cachedSchema, nil
+}
+
+// NewSchema is deprecated. Use GetSchema instead.
+// Keeping for backward compatibility during transition.
+func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
+	return GetSchema()
 }

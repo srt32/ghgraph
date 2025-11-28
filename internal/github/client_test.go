@@ -451,7 +451,8 @@ func TestListUserRepositories_Success(t *testing.T) {
 	client.baseURL = server.URL
 
 	// Call ListUserRepositories
-	result, err := client.ListUserRepositories("octocat", 2, nil)
+	first := 2
+	result, err := client.ListUserRepositories("octocat", &first, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -509,7 +510,8 @@ func TestListUserRepositories_WithCursor(t *testing.T) {
 	cursor := "Mg==" // base64 encoded "2"
 
 	// Call ListUserRepositories with cursor
-	result, err := client.ListUserRepositories("octocat", 1, &cursor)
+	first := 1
+	result, err := client.ListUserRepositories("octocat", &first, &cursor, nil, nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -559,7 +561,8 @@ func TestListUserRepositories_AuthenticatedUser(t *testing.T) {
 	client.baseURL = server.URL
 
 	// Call ListUserRepositories with empty login (authenticated user)
-	result, err := client.ListUserRepositories("", 30, nil)
+	first := 30
+	result, err := client.ListUserRepositories("", &first, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -588,7 +591,8 @@ func TestListUserRepositories_NotFound(t *testing.T) {
 	client.baseURL = server.URL
 
 	// Call ListUserRepositories
-	_, err := client.ListUserRepositories("nonexistent", 30, nil)
+	first := 30
+	_, err := client.ListUserRepositories("nonexistent", &first, nil, nil, nil)
 	if err == nil {
 		t.Fatal("Expected error for non-existent user, got nil")
 	}

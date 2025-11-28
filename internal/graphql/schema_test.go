@@ -55,9 +55,11 @@ func TestViewerQuery_AllFields(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -138,9 +140,11 @@ func TestViewerQuery_PartialFields(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -217,9 +221,11 @@ func TestViewerQuery_NullableFields(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -298,9 +304,11 @@ func TestUserQuery_Success(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -360,9 +368,11 @@ func TestUserQuery_NotFound(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Should have errors
@@ -423,9 +433,11 @@ func TestUserQuery_DifferentUsers(t *testing.T) {
 			}
 		`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 		result := graphql.Do(graphql.Params{
 			Schema:        schema,
 			RequestString: query,
+		Context:       ctx,
 		})
 
 		if len(result.Errors) > 0 {
@@ -495,9 +507,11 @@ func TestRepositoryQuery_Success(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -576,9 +590,11 @@ func TestRepositoryQuery_WithOwner(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	if len(result.Errors) > 0 {
@@ -623,9 +639,11 @@ func TestRepositoryQuery_NotFound(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Should have errors
@@ -687,9 +705,11 @@ func TestOrganizationQuery_Success(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Check for errors
@@ -749,9 +769,11 @@ func TestOrganizationQuery_NotFound(t *testing.T) {
 		}
 	`
 
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
 		RequestString: query,
+		Context:       ctx,
 	})
 
 	// Should have errors
@@ -870,7 +892,7 @@ func TestViewerRepositoriesQuery_Success(t *testing.T) {
 
 	// Create context with GitHub client
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "githubClient", client)
+	ctx = context.WithValue(ctx, githubClientKey, client)
 
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
@@ -1035,7 +1057,7 @@ func TestUserRepositoriesQuery_Success(t *testing.T) {
 
 	// Create context with GitHub client
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "githubClient", client)
+	ctx = context.WithValue(ctx, githubClientKey, client)
 
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,
@@ -1163,7 +1185,7 @@ func TestRepositoriesQuery_WithPagination(t *testing.T) {
 
 	// Create context with GitHub client
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "githubClient", client)
+	ctx = context.WithValue(ctx, githubClientKey, client)
 
 	result := graphql.Do(graphql.Params{
 		Schema:        schema,

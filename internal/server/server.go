@@ -13,6 +13,11 @@ import (
 	ghgraphql "github.com/srt32/ghgraph/internal/graphql"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const githubClientKey contextKey = "githubClient"
+
 // Server represents the GraphQL HTTP server
 type Server struct {
 	port int
@@ -77,15 +82,15 @@ func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// Create GitHub client with the provided token
 	githubClient := githubclient.NewClient(token)
 
-	// Create GraphQL schema
-	schema, err := ghgraphql.NewSchema(githubClient)
+	// Get GraphQL schema (cached after first call)
+	schema, err := ghgraphql.GetSchema()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create schema: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Create context with GitHub client
-	ctx := context.WithValue(context.Background(), "githubClient", githubClient)
+	ctx := context.WithValue(context.Background(), githubClientKey, githubClient)
 
 	// Execute GraphQL query
 	result := graphql.Do(graphql.Params{

@@ -37,8 +37,10 @@ The following scalar fields are supported on the `User` type:
 - `location` (String) - The user's location
 - `repositories` (RepositoryConnection!) - A paginated list of repositories owned by the user
   - Arguments:
-    - `first` (Int) - Number of repositories to return (default: 30)
-    - `after` (String) - Cursor to start after for pagination
+    - `first` (Int) - Number of repositories to return (forward pagination)
+    - `after` (String) - Cursor to start after for forward pagination
+    - `last` (Int) - Number of repositories to return (backward pagination)
+    - `before` (String) - Cursor to start before for backward pagination
 
 ### Repository Fields
 
@@ -88,7 +90,9 @@ Represents a paginated list of repositories:
 - `edges` ([RepositoryEdge]) - List of edges containing repositories and cursors
 - `nodes` ([Repository]) - Direct list of repositories
 - `pageInfo` (PageInfo!) - Pagination information
-- `totalCount` (Int!) - Total number of repositories in this result set
+- `totalCount` (Int!) - Count of repositories in the current page
+
+**Note:** `totalCount` returns the number of items in the current page, not the total count across all pages. This is a limitation of the GitHub REST API, which doesn't provide total counts in paginated responses.
 
 #### RepositoryEdge
 
