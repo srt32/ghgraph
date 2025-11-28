@@ -302,6 +302,87 @@ func TestGetRepository_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetOrganization_Success(t *testing.T) {
+	// Create mock organization data
+	mockOrg := Organization{
+		ID:          1,
+		Login:       "github",
+		Name:        stringPtr("GitHub"),
+		Description: stringPtr("How people build software"),
+		AvatarURL:   "https://avatars.githubusercontent.com/u/9919",
+		HTMLURL:     "https://github.com/github",
+		Email:       stringPtr("support@github.com"),
+		Location:    stringPtr("San Francisco, CA"),
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/orgs/github"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Return mock organization
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockOrg)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetOrganization
+	org, err := client.GetOrganization("github")
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if org.Login != mockOrg.Login {
+		t.Errorf("Expected Login %s, got %s", mockOrg.Login, org.Login)
+	}
+	if *org.Name != *mockOrg.Name {
+		t.Errorf("Expected Name %s, got %s", *mockOrg.Name, *org.Name)
+	}
+	if *org.Description != *mockOrg.Description {
+		t.Errorf("Expected Description %s, got %s", *mockOrg.Description, *org.Description)
+	}
+}
+
+func TestGetOrganization_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetOrganization
+	_, err := client.GetOrganization("nonexistent")
+	if err == nil {
+		t.Fatal("Expected error for non-existent organization, got nil")
+	}
+
+	// Verify error message
+	expectedMsg := "organization not found: nonexistent"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

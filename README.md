@@ -21,6 +21,7 @@ This project clones the GitHub GraphQL API interface but translates all queries 
 - `viewer` - Returns the authenticated user
 - `user(login: String!)` - Lookup a user by login
 - `repository(owner: String!, name: String!)` - Lookup a repository by owner and name
+- `organization(login: String!)` - Lookup an organization by login
 
 ### User Fields
 
@@ -49,6 +50,19 @@ The following fields are supported on the `Repository` type:
 - `forkCount` (Int!) - Number of forks
 - `defaultBranchRef` (String) - Name of the default branch
 - `owner` (User!) - The User who owns the repository
+
+### Organization Fields
+
+The following fields are supported on the `Organization` type:
+
+- `id` (String!) - The organization's ID
+- `login` (String!) - The organization's login name
+- `name` (String) - The organization's public profile name
+- `description` (String) - The organization's description
+- `avatarUrl` (String!) - URL to the organization's avatar
+- `url` (String!) - The HTTP URL for this organization
+- `email` (String) - The organization's public email
+- `location` (String) - The organization's location
 
 ## Installation
 
@@ -133,6 +147,17 @@ curl -X POST http://localhost:8080/graphql \
   -H "Content-Type: application/json" \
   -d '{
     "query": "{ repository(owner: \"facebook\", name: \"react\") { name nameWithOwner description stargazerCount owner { login name } } }"
+  }'
+```
+
+#### Example: Query Organization
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ organization(login: \"github\") { login name description location } }"
   }'
 ```
 

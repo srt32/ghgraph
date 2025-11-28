@@ -46,6 +46,18 @@ type Repository struct {
 	Owner           User    `json:"owner"`
 }
 
+// Organization represents a GitHub organization from the REST API
+type Organization struct {
+	ID          int64   `json:"id"`
+	Login       string  `json:"login"`
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	AvatarURL   string  `json:"avatar_url"`
+	HTMLURL     string  `json:"html_url"`
+	Email       *string `json:"email"`
+	Location    *string `json:"location"`
+}
+
 // NewClient creates a new GitHub REST API client
 func NewClient(token string) *Client {
 	return &Client{
@@ -158,4 +170,38 @@ func (c *Client) GetRepository(owner, name string) (*Repository, error) {
 	}
 
 	return &repo, nil
+}
+
+// GetOrganization fetches a specific organization by login
+func (c *Client) GetOrganization(login string) (*Organization, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/orgs/%s", c.baseURL, login), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("organization not found: %s", login)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var org Organization
+	if err := json.NewDecoder(resp.Body).Decode(&org); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &org, nil
 }

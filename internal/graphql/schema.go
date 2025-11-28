@@ -207,6 +207,94 @@ var repositoryType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// organizationType represents the GraphQL Organization type matching GitHub's schema
+var organizationType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "Organization",
+	Description: "An organization is a collection of teams and repositories.",
+	Fields: graphql.Fields{
+		"id": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The Node ID of the Organization object",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Login, nil
+				}
+				return nil, nil
+			},
+		},
+		"login": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The organization's login name.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Login, nil
+				}
+				return nil, nil
+			},
+		},
+		"name": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The organization's public profile name.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Name, nil
+				}
+				return nil, nil
+			},
+		},
+		"description": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The organization's public profile description.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Description, nil
+				}
+				return nil, nil
+			},
+		},
+		"avatarUrl": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "A URL pointing to the organization's public avatar.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.AvatarURL, nil
+				}
+				return nil, nil
+			},
+		},
+		"url": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The HTTP URL for this organization.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.HTMLURL, nil
+				}
+				return nil, nil
+			},
+		},
+		"email": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The organization's public email.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Email, nil
+				}
+				return nil, nil
+			},
+		},
+		"location": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The organization's public profile location.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if org, ok := p.Source.(*github.Organization); ok {
+					return org.Location, nil
+				}
+				return nil, nil
+			},
+		},
+	},
+})
+
 // NewSchema creates a new GraphQL schema
 func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 	queryType := graphql.NewObject(graphql.ObjectConfig{
@@ -256,6 +344,23 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 						return nil, nil
 					}
 					return githubClient.GetRepository(owner, name)
+				},
+			},
+			"organization": &graphql.Field{
+				Type:        organizationType,
+				Description: "Lookup an organization by login.",
+				Args: graphql.FieldConfigArgument{
+					"login": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The organization's login.",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					login, ok := p.Args["login"].(string)
+					if !ok {
+						return nil, nil
+					}
+					return githubClient.GetOrganization(login)
 				},
 			},
 		},

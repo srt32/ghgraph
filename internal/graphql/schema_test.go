@@ -638,6 +638,132 @@ func TestRepositoryQuery_NotFound(t *testing.T) {
 	}
 }
 
+func TestOrganizationQuery_Success(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the correct endpoint is called
+		if r.URL.Path != "/orgs/github" {
+			t.Errorf("Expected path '/orgs/github', got '%s'", r.URL.Path)
+		}
+
+		mockOrg := github.Organization{
+			ID:          1,
+			Login:       "github",
+			Name:        stringPtr("GitHub"),
+			Description: stringPtr("How people build software"),
+			AvatarURL:   "https://avatars.githubusercontent.com/u/9919",
+			HTMLURL:     "https://github.com/github",
+			Email:       stringPtr("support@github.com"),
+			Location:    stringPtr("San Francisco, CA"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockOrg)
+	}))
+	defer server.Close()
+
+	// Create GitHub client pointing to mock server
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	// Create schema
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Execute query
+	query := `
+		query {
+			organization(login: "github") {
+				login
+				name
+				description
+				avatarUrl
+				url
+				email
+				location
+			}
+		}
+	`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+	})
+
+	// Check for errors
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	// Verify response structure
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected data to be a map")
+	}
+
+	org, ok := data["organization"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected organization to be a map")
+	}
+
+	// Verify fields
+	if org["login"] != "github" {
+		t.Errorf("Expected login 'github', got %v", org["login"])
+	}
+	if org["name"] != "GitHub" {
+		t.Errorf("Expected name 'GitHub', got %v", org["name"])
+	}
+	if org["description"] != "How people build software" {
+		t.Errorf("Expected description, got %v", org["description"])
+	}
+	if org["email"] != "support@github.com" {
+		t.Errorf("Expected email 'support@github.com', got %v", org["email"])
+	}
+}
+
+func TestOrganizationQuery_NotFound(t *testing.T) {
+	// Create mock GitHub API server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	query := `
+		query {
+			organization(login: "nonexistent") {
+				login
+			}
+		}
+	`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+	})
+
+	// Should have errors
+	if len(result.Errors) == 0 {
+		t.Fatal("Expected GraphQL errors for non-existent organization")
+	}
+
+	errorMsg := result.Errors[0].Message
+	if errorMsg != "organization not found: nonexistent" {
+		t.Errorf("Expected error 'organization not found: nonexistent', got '%s'", errorMsg)
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }
