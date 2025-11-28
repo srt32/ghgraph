@@ -213,6 +213,95 @@ func TestGetUser_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetRepository_Success(t *testing.T) {
+	// Create mock repository data
+	mockRepo := Repository{
+		ID:              12345,
+		Name:            "hello-world",
+		FullName:        "octocat/hello-world",
+		Description:     stringPtr("My first repository"),
+		Private:         false,
+		HTMLURL:         "https://github.com/octocat/hello-world",
+		StargazersCount: 100,
+		ForksCount:      25,
+		DefaultBranch:   "main",
+		Owner: User{
+			ID:    583231,
+			Login: "octocat",
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/repos/octocat/hello-world"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Return mock repository
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mockRepo)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetRepository
+	repo, err := client.GetRepository("octocat", "hello-world")
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if repo.Name != mockRepo.Name {
+		t.Errorf("Expected Name %s, got %s", mockRepo.Name, repo.Name)
+	}
+	if repo.FullName != mockRepo.FullName {
+		t.Errorf("Expected FullName %s, got %s", mockRepo.FullName, repo.FullName)
+	}
+	if repo.StargazersCount != mockRepo.StargazersCount {
+		t.Errorf("Expected StargazersCount %d, got %d", mockRepo.StargazersCount, repo.StargazersCount)
+	}
+	if repo.Owner.Login != mockRepo.Owner.Login {
+		t.Errorf("Expected Owner.Login %s, got %s", mockRepo.Owner.Login, repo.Owner.Login)
+	}
+}
+
+func TestGetRepository_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call GetRepository
+	_, err := client.GetRepository("nonexistent", "repo")
+	if err == nil {
+		t.Fatal("Expected error for non-existent repository, got nil")
+	}
+
+	// Verify error message
+	expectedMsg := "repository not found: nonexistent/repo"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

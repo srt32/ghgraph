@@ -20,6 +20,7 @@ This project clones the GitHub GraphQL API interface but translates all queries 
 
 - `viewer` - Returns the authenticated user
 - `user(login: String!)` - Lookup a user by login
+- `repository(owner: String!, name: String!)` - Lookup a repository by owner and name
 
 ### User Fields
 
@@ -33,6 +34,21 @@ The following scalar fields are supported on the `User` type:
 - `bio` (String) - The user's bio
 - `company` (String) - The user's company
 - `location` (String) - The user's location
+
+### Repository Fields
+
+The following fields are supported on the `Repository` type:
+
+- `id` (String!) - The repository's ID
+- `name` (String!) - The name of the repository
+- `nameWithOwner` (String!) - The repository's name with owner (e.g., "owner/repo")
+- `description` (String) - The description of the repository
+- `isPrivate` (Boolean!) - Whether the repository is private
+- `url` (String!) - The HTTP URL for this repository
+- `stargazerCount` (Int!) - Number of stars
+- `forkCount` (Int!) - Number of forks
+- `defaultBranchRef` (String) - Name of the default branch
+- `owner` (User!) - The User who owns the repository
 
 ## Installation
 
@@ -106,6 +122,17 @@ curl -X POST http://localhost:8080/graphql \
   -H "Content-Type: application/json" \
   -d '{
     "query": "{ user(login: \"octocat\") { login name bio company } }"
+  }'
+```
+
+#### Example: Query Repository with Nested Owner
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ repository(owner: \"facebook\", name: \"react\") { name nameWithOwner description stargazerCount owner { login name } } }"
   }'
 ```
 

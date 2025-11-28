@@ -99,6 +99,114 @@ var userType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// repositoryType represents the GraphQL Repository type matching GitHub's schema
+var repositoryType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "Repository",
+	Description: "A repository contains the content for a project.",
+	Fields: graphql.Fields{
+		"id": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The Node ID of the Repository object",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.Name, nil
+				}
+				return nil, nil
+			},
+		},
+		"name": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The name of the repository.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.Name, nil
+				}
+				return nil, nil
+			},
+		},
+		"nameWithOwner": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The repository's name with owner.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.FullName, nil
+				}
+				return nil, nil
+			},
+		},
+		"description": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The description of the repository.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.Description, nil
+				}
+				return nil, nil
+			},
+		},
+		"isPrivate": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "Identifies if the repository is private.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.Private, nil
+				}
+				return false, nil
+			},
+		},
+		"url": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "The HTTP URL for this repository",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.HTMLURL, nil
+				}
+				return nil, nil
+			},
+		},
+		"stargazerCount": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Returns a count of how many stargazers there are on this repository",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.StargazersCount, nil
+				}
+				return 0, nil
+			},
+		},
+		"forkCount": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Returns how many forks there are of this repository in the whole network.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.ForksCount, nil
+				}
+				return 0, nil
+			},
+		},
+		"defaultBranchRef": &graphql.Field{
+			Type:        graphql.String,
+			Description: "The name of the default branch (simplified, returns just the branch name).",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return repo.DefaultBranch, nil
+				}
+				return nil, nil
+			},
+		},
+		"owner": &graphql.Field{
+			Type:        userType,
+			Description: "The User owner of the repository.",
+			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+				if repo, ok := p.Source.(*github.Repository); ok {
+					return &repo.Owner, nil
+				}
+				return nil, nil
+			},
+		},
+	},
+})
+
 // NewSchema creates a new GraphQL schema
 func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 	queryType := graphql.NewObject(graphql.ObjectConfig{
@@ -126,6 +234,28 @@ func NewSchema(githubClient *github.Client) (graphql.Schema, error) {
 						return nil, nil
 					}
 					return githubClient.GetUser(login)
+				},
+			},
+			"repository": &graphql.Field{
+				Type:        repositoryType,
+				Description: "Lookup a repository by owner and name.",
+				Args: graphql.FieldConfigArgument{
+					"owner": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The login field of the repository's owner.",
+					},
+					"name": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The name of the repository.",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					owner, ownerOk := p.Args["owner"].(string)
+					name, nameOk := p.Args["name"].(string)
+					if !ownerOk || !nameOk {
+						return nil, nil
+					}
+					return githubClient.GetRepository(owner, name)
 				},
 			},
 		},

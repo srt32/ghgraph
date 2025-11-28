@@ -32,6 +32,20 @@ type User struct {
 	Location  *string `json:"location"`
 }
 
+// Repository represents a GitHub repository from the REST API
+type Repository struct {
+	ID              int64   `json:"id"`
+	Name            string  `json:"name"`
+	FullName        string  `json:"full_name"`
+	Description     *string `json:"description"`
+	Private         bool    `json:"private"`
+	HTMLURL         string  `json:"html_url"`
+	StargazersCount int     `json:"stargazers_count"`
+	ForksCount      int     `json:"forks_count"`
+	DefaultBranch   string  `json:"default_branch"`
+	Owner           User    `json:"owner"`
+}
+
 // NewClient creates a new GitHub REST API client
 func NewClient(token string) *Client {
 	return &Client{
@@ -110,4 +124,38 @@ func (c *Client) GetUser(login string) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+// GetRepository fetches a specific repository by owner and name
+func (c *Client) GetRepository(owner, name string) (*Repository, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/%s", c.baseURL, owner, name), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("repository not found: %s/%s", owner, name)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var repo Repository
+	if err := json.NewDecoder(resp.Body).Decode(&repo); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &repo, nil
 }
