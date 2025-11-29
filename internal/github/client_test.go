@@ -604,6 +604,354 @@ func TestListUserRepositories_NotFound(t *testing.T) {
 	}
 }
 
+func TestListRepositoryIssues_Success(t *testing.T) {
+	// Create mock issues data
+	mockIssues := []*Issue{
+		{
+			ID:        1,
+			Number:    10,
+			Title:     "First issue",
+			Body:      stringPtr("Issue body"),
+			State:     "open",
+			HTMLURL:   "https://github.com/octocat/repo/issues/10",
+			User:      User{ID: 1, Login: "user1"},
+			CreatedAt: "2023-01-01T00:00:00Z",
+			UpdatedAt: "2023-01-02T00:00:00Z",
+			ClosedAt:  nil,
+		},
+		{
+			ID:        2,
+			Number:    11,
+			Title:     "Second issue",
+			Body:      stringPtr("Another issue"),
+			State:     "closed",
+			HTMLURL:   "https://github.com/octocat/repo/issues/11",
+			User:      User{ID: 2, Login: "user2"},
+			CreatedAt: "2023-01-03T00:00:00Z",
+			UpdatedAt: "2023-01-04T00:00:00Z",
+			ClosedAt:  stringPtr("2023-01-05T00:00:00Z"),
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/repos/octocat/repo/issues"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Verify query parameters
+		if r.URL.Query().Get("state") != "all" {
+			t.Errorf("Expected state=all, got %s", r.URL.Query().Get("state"))
+		}
+		if r.URL.Query().Get("per_page") != "2" {
+			t.Errorf("Expected per_page=2, got %s", r.URL.Query().Get("per_page"))
+		}
+
+		// Return mock issues with pagination link
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", "<http://test/repos/octocat/repo/issues?page=2>; rel=\"next\", <http://test/repos/octocat/repo/issues?page=5>; rel=\"last\"")
+		json.NewEncoder(w).Encode(mockIssues)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListRepositoryIssues
+	first := 2
+	result, err := client.ListRepositoryIssues("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if len(result.Issues) != 2 {
+		t.Errorf("Expected 2 issues, got %d", len(result.Issues))
+	}
+	if result.HasNextPage != true {
+		t.Error("Expected HasNextPage to be true")
+	}
+	if result.HasPrevPage != false {
+		t.Error("Expected HasPrevPage to be false")
+	}
+	if result.Issues[0].Title != "First issue" {
+		t.Errorf("Expected first issue title 'First issue', got '%s'", result.Issues[0].Title)
+	}
+	if result.Issues[0].State != "open" {
+		t.Errorf("Expected first issue state 'open', got '%s'", result.Issues[0].State)
+	}
+	if result.Issues[1].ClosedAt == nil {
+		t.Error("Expected second issue to have ClosedAt")
+	}
+}
+
+func TestListRepositoryIssues_WithCache(t *testing.T) {
+	callCount := 0
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]*Issue{
+			{
+				ID:        1,
+				Number:    10,
+				Title:     "Test issue",
+				State:     "open",
+				HTMLURL:   "https://github.com/octocat/repo/issues/10",
+				User:      User{ID: 1, Login: "user1"},
+				CreatedAt: "2023-01-01T00:00:00Z",
+				UpdatedAt: "2023-01-02T00:00:00Z",
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// First call - should hit the API
+	first := 1
+	result1, err := client.ListRepositoryIssues("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error on first call, got: %v", err)
+	}
+
+	// Second call with same parameters - should hit cache
+	result2, err := client.ListRepositoryIssues("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error on second call, got: %v", err)
+	}
+
+	// Verify cache was used (API only called once)
+	if callCount != 1 {
+		t.Errorf("Expected API to be called once, was called %d times", callCount)
+	}
+
+	// Verify both results are identical
+	if len(result1.Issues) != len(result2.Issues) {
+		t.Error("Expected cached result to match original")
+	}
+	if result1.Issues[0].Title != result2.Issues[0].Title {
+		t.Error("Expected cached result to match original")
+	}
+}
+
+func TestListRepositoryIssues_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListRepositoryIssues
+	first := 30
+	_, err := client.ListRepositoryIssues("nonexistent", "repo", "all", &first, nil, nil, nil)
+	if err == nil {
+		t.Fatal("Expected error for non-existent repository, got nil")
+	}
+
+	// Verify error message
+	expectedMsg := "repository not found: nonexistent/repo"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
+func TestListRepositoryPullRequests_Success(t *testing.T) {
+	// Create mock pull requests data
+	mockPRs := []*PullRequest{
+		{
+			ID:        1,
+			Number:    20,
+			Title:     "First PR",
+			Body:      stringPtr("PR body"),
+			State:     "open",
+			HTMLURL:   "https://github.com/octocat/repo/pull/20",
+			User:      User{ID: 1, Login: "user1"},
+			CreatedAt: "2023-01-01T00:00:00Z",
+			UpdatedAt: "2023-01-02T00:00:00Z",
+			ClosedAt:  nil,
+			MergedAt:  nil,
+			Merged:    false,
+		},
+		{
+			ID:        2,
+			Number:    21,
+			Title:     "Second PR",
+			Body:      stringPtr("Another PR"),
+			State:     "closed",
+			HTMLURL:   "https://github.com/octocat/repo/pull/21",
+			User:      User{ID: 2, Login: "user2"},
+			CreatedAt: "2023-01-03T00:00:00Z",
+			UpdatedAt: "2023-01-04T00:00:00Z",
+			ClosedAt:  stringPtr("2023-01-05T00:00:00Z"),
+			MergedAt:  stringPtr("2023-01-05T00:00:00Z"),
+			Merged:    true,
+		},
+	}
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Errorf("Expected Authorization header 'Bearer test-token', got '%s'", auth)
+		}
+
+		// Verify endpoint
+		expectedPath := "/repos/octocat/repo/pulls"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected path '%s', got '%s'", expectedPath, r.URL.Path)
+		}
+
+		// Verify query parameters
+		if r.URL.Query().Get("state") != "all" {
+			t.Errorf("Expected state=all, got %s", r.URL.Query().Get("state"))
+		}
+		if r.URL.Query().Get("per_page") != "2" {
+			t.Errorf("Expected per_page=2, got %s", r.URL.Query().Get("per_page"))
+		}
+
+		// Return mock PRs with pagination link
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", "<http://test/repos/octocat/repo/pulls?page=2>; rel=\"next\", <http://test/repos/octocat/repo/pulls?page=5>; rel=\"last\"")
+		json.NewEncoder(w).Encode(mockPRs)
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListRepositoryPullRequests
+	first := 2
+	result, err := client.ListRepositoryPullRequests("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Verify response
+	if len(result.PullRequests) != 2 {
+		t.Errorf("Expected 2 pull requests, got %d", len(result.PullRequests))
+	}
+	if result.HasNextPage != true {
+		t.Error("Expected HasNextPage to be true")
+	}
+	if result.HasPrevPage != false {
+		t.Error("Expected HasPrevPage to be false")
+	}
+	if result.PullRequests[0].Title != "First PR" {
+		t.Errorf("Expected first PR title 'First PR', got '%s'", result.PullRequests[0].Title)
+	}
+	if result.PullRequests[0].Merged != false {
+		t.Error("Expected first PR to not be merged")
+	}
+	if result.PullRequests[1].Merged != true {
+		t.Error("Expected second PR to be merged")
+	}
+	if result.PullRequests[1].MergedAt == nil {
+		t.Error("Expected second PR to have MergedAt")
+	}
+}
+
+func TestListRepositoryPullRequests_WithCache(t *testing.T) {
+	callCount := 0
+
+	// Create a test server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]*PullRequest{
+			{
+				ID:        1,
+				Number:    20,
+				Title:     "Test PR",
+				State:     "open",
+				HTMLURL:   "https://github.com/octocat/repo/pull/20",
+				User:      User{ID: 1, Login: "user1"},
+				CreatedAt: "2023-01-01T00:00:00Z",
+				UpdatedAt: "2023-01-02T00:00:00Z",
+				Merged:    false,
+			},
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// First call - should hit the API
+	first := 1
+	result1, err := client.ListRepositoryPullRequests("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error on first call, got: %v", err)
+	}
+
+	// Second call with same parameters - should hit cache
+	result2, err := client.ListRepositoryPullRequests("octocat", "repo", "all", &first, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Expected no error on second call, got: %v", err)
+	}
+
+	// Verify cache was used (API only called once)
+	if callCount != 1 {
+		t.Errorf("Expected API to be called once, was called %d times", callCount)
+	}
+
+	// Verify both results are identical
+	if len(result1.PullRequests) != len(result2.PullRequests) {
+		t.Error("Expected cached result to match original")
+	}
+	if result1.PullRequests[0].Title != result2.PullRequests[0].Title {
+		t.Error("Expected cached result to match original")
+	}
+}
+
+func TestListRepositoryPullRequests_NotFound(t *testing.T) {
+	// Create a test server that returns 404
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	// Create client pointing to test server
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Call ListRepositoryPullRequests
+	first := 30
+	_, err := client.ListRepositoryPullRequests("nonexistent", "repo", "all", &first, nil, nil, nil)
+	if err == nil {
+		t.Fatal("Expected error for non-existent repository, got nil")
+	}
+
+	// Verify error message
+	expectedMsg := "repository not found: nonexistent/repo"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got '%s'", expectedMsg, err.Error())
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

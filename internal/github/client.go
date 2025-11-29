@@ -10,18 +10,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/srt32/ghgraph/internal/cache"
 )
 
 const (
 	defaultBaseURL = "https://api.github.com"
 	apiVersion     = "2022-11-28"
+	cacheTTL       = 5 * time.Minute
 )
 
-// Client is a GitHub REST API client
+var (
+	// sharedCache is a global cache instance shared across all clients
+	sharedCache = cache.NewCache(cacheTTL)
+)
+
+// Client is a GitHub REST API client with caching support
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      string
+	cache      *cache.Cache
 }
 
 // User represents a GitHub user from the REST API
@@ -72,6 +81,56 @@ type RepositoriesResult struct {
 	StartCursor  *string
 }
 
+// Issue represents a GitHub issue from the REST API
+type Issue struct {
+	ID        int64   `json:"id"`
+	Number    int     `json:"number"`
+	Title     string  `json:"title"`
+	Body      *string `json:"body"`
+	State     string  `json:"state"`
+	HTMLURL   string  `json:"html_url"`
+	User      User    `json:"user"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ClosedAt  *string `json:"closed_at"`
+}
+
+// PullRequest represents a GitHub pull request from the REST API
+type PullRequest struct {
+	ID        int64   `json:"id"`
+	Number    int     `json:"number"`
+	Title     string  `json:"title"`
+	Body      *string `json:"body"`
+	State     string  `json:"state"`
+	HTMLURL   string  `json:"html_url"`
+	User      User    `json:"user"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ClosedAt  *string `json:"closed_at"`
+	MergedAt  *string `json:"merged_at"`
+	Merged    bool    `json:"merged"`
+}
+
+// IssuesResult represents a paginated list of issues
+type IssuesResult struct {
+	Issues      []*Issue
+	TotalCount  int
+	HasNextPage bool
+	HasPrevPage bool
+	EndCursor   *string
+	StartCursor *string
+}
+
+// PullRequestsResult represents a paginated list of pull requests
+type PullRequestsResult struct {
+	PullRequests []*PullRequest
+	TotalCount   int
+	HasNextPage  bool
+	HasPrevPage  bool
+	EndCursor    *string
+	StartCursor  *string
+}
+
 // NewClient creates a new GitHub REST API client
 func NewClient(token string) *Client {
 	return &Client{
@@ -80,6 +139,7 @@ func NewClient(token string) *Client {
 			Timeout: 30 * time.Second,
 		},
 		token: token,
+		cache: sharedCache,
 	}
 }
 
@@ -337,6 +397,226 @@ func (c *Client) ListUserRepositories(login string, first *int, after *string, l
 		EndCursor:    endCursor,
 		StartCursor:  startCursor,
 	}, nil
+}
+
+// ListRepositoryIssues fetches issues for a repository with pagination support
+// Supports both forward (first/after) and backward (last/before) pagination
+// state can be "open", "closed", or "all"
+func (c *Client) ListRepositoryIssues(owner, name string, state string, first *int, after *string, last *int, before *string) (*IssuesResult, error) {
+	// Determine page size and number
+	perPage := 30
+	page := 1
+
+	if first != nil {
+		perPage = *first
+		if after != nil && *after != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(*after); err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 0 {
+					page = p
+				}
+			}
+		}
+	}
+
+	if last != nil {
+		perPage = *last
+		if before != nil && *before != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(*before); err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 1 {
+					page = p - 1
+				}
+			}
+		}
+	}
+
+	// Check cache first
+	cacheKey := fmt.Sprintf("issues:%s/%s:%s:page%d:per%d", owner, name, state, page, perPage)
+	if cached := c.cache.Get(c.token, cacheKey); cached != nil {
+		return cached.(*IssuesResult), nil
+	}
+
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues", c.baseURL, owner, name)
+	params := url.Values{}
+	params.Set("state", state)
+	params.Set("per_page", strconv.Itoa(perPage))
+	params.Set("page", strconv.Itoa(page))
+	params.Set("sort", "updated")
+	params.Set("direction", "desc")
+
+	fullURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("repository not found: %s/%s", owner, name)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var issues []*Issue
+	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	hasNextPage := false
+	hasPrevPage := page > 1
+	linkHeader := resp.Header.Get("Link")
+	if linkHeader != "" {
+		links := parseLinkHeader(linkHeader)
+		if _, ok := links["next"]; ok {
+			hasNextPage = true
+		}
+	}
+
+	var startCursor, endCursor *string
+	if len(issues) > 0 {
+		start := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page)))
+		startCursor = &start
+		if hasNextPage {
+			end := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page + 1)))
+			endCursor = &end
+		}
+	}
+
+	result := &IssuesResult{
+		Issues:      issues,
+		TotalCount:  len(issues),
+		HasNextPage: hasNextPage,
+		HasPrevPage: hasPrevPage,
+		EndCursor:   endCursor,
+		StartCursor: startCursor,
+	}
+
+	// Cache the result
+	c.cache.Set(c.token, cacheKey, result)
+
+	return result, nil
+}
+
+// ListRepositoryPullRequests fetches pull requests for a repository with pagination support
+// Supports both forward (first/after) and backward (last/before) pagination
+// state can be "open", "closed", or "all"
+func (c *Client) ListRepositoryPullRequests(owner, name string, state string, first *int, after *string, last *int, before *string) (*PullRequestsResult, error) {
+	// Determine page size and number
+	perPage := 30
+	page := 1
+
+	if first != nil {
+		perPage = *first
+		if after != nil && *after != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(*after); err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 0 {
+					page = p
+				}
+			}
+		}
+	}
+
+	if last != nil {
+		perPage = *last
+		if before != nil && *before != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(*before); err == nil {
+				if p, err := strconv.Atoi(string(decoded)); err == nil && p > 1 {
+					page = p - 1
+				}
+			}
+		}
+	}
+
+	// Check cache first
+	cacheKey := fmt.Sprintf("pullRequests:%s/%s:%s:page%d:per%d", owner, name, state, page, perPage)
+	if cached := c.cache.Get(c.token, cacheKey); cached != nil {
+		return cached.(*PullRequestsResult), nil
+	}
+
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls", c.baseURL, owner, name)
+	params := url.Values{}
+	params.Set("state", state)
+	params.Set("per_page", strconv.Itoa(perPage))
+	params.Set("page", strconv.Itoa(page))
+	params.Set("sort", "updated")
+	params.Set("direction", "desc")
+
+	fullURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("repository not found: %s/%s", owner, name)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var prs []*PullRequest
+	if err := json.NewDecoder(resp.Body).Decode(&prs); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	hasNextPage := false
+	hasPrevPage := page > 1
+	linkHeader := resp.Header.Get("Link")
+	if linkHeader != "" {
+		links := parseLinkHeader(linkHeader)
+		if _, ok := links["next"]; ok {
+			hasNextPage = true
+		}
+	}
+
+	var startCursor, endCursor *string
+	if len(prs) > 0 {
+		start := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page)))
+		startCursor = &start
+		if hasNextPage {
+			end := base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(page + 1)))
+			endCursor = &end
+		}
+	}
+
+	result := &PullRequestsResult{
+		PullRequests: prs,
+		TotalCount:   len(prs),
+		HasNextPage:  hasNextPage,
+		HasPrevPage:  hasPrevPage,
+		EndCursor:    endCursor,
+		StartCursor:  startCursor,
+	}
+
+	// Cache the result
+	c.cache.Set(c.token, cacheKey, result)
+
+	return result, nil
 }
 
 // parseLinkHeader parses the GitHub Link header format

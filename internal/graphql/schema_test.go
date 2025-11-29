@@ -1267,6 +1267,609 @@ func TestRepositoriesQuery_WithPagination(t *testing.T) {
 	}
 }
 
+func TestRepositoryIssuesQuery_Success(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/repos/octocat/repo" {
+			// Return repository info
+			mockRepo := github.Repository{
+				ID:       12345,
+				Name:     "repo",
+				FullName: "octocat/repo",
+				Owner: github.User{
+					ID:    583231,
+					Login: "octocat",
+				},
+			}
+			json.NewEncoder(w).Encode(mockRepo)
+		} else if r.URL.Path == "/repos/octocat/repo/issues" {
+			mockIssues := []*github.Issue{
+				{
+					ID:        1,
+					Number:    10,
+					Title:     "First issue",
+					Body:      stringPtr("Issue body"),
+					State:     "open",
+					HTMLURL:   "https://github.com/octocat/repo/issues/10",
+					User:      github.User{ID: 1, Login: "user1"},
+					CreatedAt: "2023-01-01T00:00:00Z",
+					UpdatedAt: "2023-01-02T00:00:00Z",
+				},
+				{
+					ID:        2,
+					Number:    11,
+					Title:     "Second issue",
+					State:     "closed",
+					HTMLURL:   "https://github.com/octocat/repo/issues/11",
+					User:      github.User{ID: 2, Login: "user2"},
+					CreatedAt: "2023-01-03T00:00:00Z",
+					UpdatedAt: "2023-01-04T00:00:00Z",
+				},
+			}
+			w.Header().Set("Link", "<http://test/repos/octocat/repo/issues?page=2>; rel=\"next\"")
+			json.NewEncoder(w).Encode(mockIssues)
+		}
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	query := `
+		query {
+			repository(owner: "octocat", name: "repo") {
+				issues(first: 2) {
+					pageInfo {
+						hasNextPage
+						hasPreviousPage
+						endCursor
+					}
+					nodes {
+						id
+						number
+						title
+						body
+						state
+						url
+						author {
+							login
+						}
+						createdAt
+					}
+				}
+			}
+		}
+	`
+
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	repo := data["repository"].(map[string]interface{})
+	issues := repo["issues"].(map[string]interface{})
+	pageInfo := issues["pageInfo"].(map[string]interface{})
+	nodes := issues["nodes"].([]interface{})
+
+	if pageInfo["hasNextPage"] != true {
+		t.Error("Expected hasNextPage to be true")
+	}
+	if pageInfo["hasPreviousPage"] != false {
+		t.Error("Expected hasPreviousPage to be false")
+	}
+
+	if len(nodes) != 2 {
+		t.Fatalf("Expected 2 issues, got %d", len(nodes))
+	}
+
+	issue1 := nodes[0].(map[string]interface{})
+	if issue1["number"] != 10 {
+		t.Errorf("Expected issue number 10, got %v", issue1["number"])
+	}
+	if issue1["title"] != "First issue" {
+		t.Errorf("Expected title 'First issue', got %v", issue1["title"])
+	}
+	if issue1["state"] != "OPEN" {
+		t.Errorf("Expected state 'OPEN', got %v", issue1["state"])
+	}
+
+	author := issue1["author"].(map[string]interface{})
+	if author["login"] != "user1" {
+		t.Errorf("Expected author login 'user1', got %v", author["login"])
+	}
+}
+
+func TestRepositoryIssuesQuery_WithStateFilter(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/repos/octocat/repo" {
+			mockRepo := github.Repository{
+				ID:       12345,
+				Name:     "repo",
+				FullName: "octocat/repo",
+				Owner: github.User{
+					ID:    583231,
+					Login: "octocat",
+				},
+			}
+			json.NewEncoder(w).Encode(mockRepo)
+		} else if r.URL.Path == "/repos/octocat/repo/issues" {
+			// Verify state filter in query parameters
+			state := r.URL.Query().Get("state")
+			if state != "open" {
+				t.Errorf("Expected state filter 'open', got '%s'", state)
+			}
+
+			mockIssues := []*github.Issue{
+				{
+					ID:        1,
+					Number:    10,
+					Title:     "Open issue",
+					State:     "open",
+					HTMLURL:   "https://github.com/octocat/repo/issues/10",
+					User:      github.User{ID: 1, Login: "user1"},
+					CreatedAt: "2023-01-01T00:00:00Z",
+					UpdatedAt: "2023-01-02T00:00:00Z",
+				},
+			}
+			json.NewEncoder(w).Encode(mockIssues)
+		}
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	query := `
+		query {
+			repository(owner: "octocat", name: "repo") {
+				issues(first: 10, states: [OPEN]) {
+					nodes {
+						number
+						title
+						state
+					}
+				}
+			}
+		}
+	`
+
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	repo := data["repository"].(map[string]interface{})
+	issues := repo["issues"].(map[string]interface{})
+	nodes := issues["nodes"].([]interface{})
+
+	if len(nodes) != 1 {
+		t.Fatalf("Expected 1 issue, got %d", len(nodes))
+	}
+
+	issue := nodes[0].(map[string]interface{})
+	if issue["state"] != "OPEN" {
+		t.Errorf("Expected all issues to be OPEN, got %v", issue["state"])
+	}
+}
+
+func TestRepositoryPullRequestsQuery_Success(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/repos/octocat/repo" {
+			mockRepo := github.Repository{
+				ID:       12345,
+				Name:     "repo",
+				FullName: "octocat/repo",
+				Owner: github.User{
+					ID:    583231,
+					Login: "octocat",
+				},
+			}
+			json.NewEncoder(w).Encode(mockRepo)
+		} else if r.URL.Path == "/repos/octocat/repo/pulls" {
+			mockPRs := []*github.PullRequest{
+				{
+					ID:        1,
+					Number:    20,
+					Title:     "First PR",
+					Body:      stringPtr("PR body"),
+					State:     "open",
+					HTMLURL:   "https://github.com/octocat/repo/pull/20",
+					User:      github.User{ID: 1, Login: "user1"},
+					CreatedAt: "2023-01-01T00:00:00Z",
+					UpdatedAt: "2023-01-02T00:00:00Z",
+					Merged:    false,
+				},
+				{
+					ID:        2,
+					Number:    21,
+					Title:     "Merged PR",
+					State:     "closed",
+					HTMLURL:   "https://github.com/octocat/repo/pull/21",
+					User:      github.User{ID: 2, Login: "user2"},
+					CreatedAt: "2023-01-03T00:00:00Z",
+					UpdatedAt: "2023-01-04T00:00:00Z",
+					MergedAt:  stringPtr("2023-01-05T00:00:00Z"),
+					Merged:    true,
+				},
+			}
+			w.Header().Set("Link", "<http://test/repos/octocat/repo/pulls?page=2>; rel=\"next\"")
+			json.NewEncoder(w).Encode(mockPRs)
+		}
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	query := `
+		query {
+			repository(owner: "octocat", name: "repo") {
+				pullRequests(first: 2) {
+					pageInfo {
+						hasNextPage
+						hasPreviousPage
+						endCursor
+					}
+					nodes {
+						id
+						number
+						title
+						body
+						state
+						url
+						author {
+							login
+						}
+						createdAt
+						merged
+					}
+				}
+			}
+		}
+	`
+
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	repo := data["repository"].(map[string]interface{})
+	prs := repo["pullRequests"].(map[string]interface{})
+	pageInfo := prs["pageInfo"].(map[string]interface{})
+	nodes := prs["nodes"].([]interface{})
+
+	if pageInfo["hasNextPage"] != true {
+		t.Error("Expected hasNextPage to be true")
+	}
+	if pageInfo["hasPreviousPage"] != false {
+		t.Error("Expected hasPreviousPage to be false")
+	}
+
+	if len(nodes) != 2 {
+		t.Fatalf("Expected 2 PRs, got %d", len(nodes))
+	}
+
+	pr1 := nodes[0].(map[string]interface{})
+	if pr1["number"] != 20 {
+		t.Errorf("Expected PR number 20, got %v", pr1["number"])
+	}
+	if pr1["title"] != "First PR" {
+		t.Errorf("Expected title 'First PR', got %v", pr1["title"])
+	}
+	if pr1["state"] != "OPEN" {
+		t.Errorf("Expected state 'OPEN', got %v", pr1["state"])
+	}
+	if pr1["merged"] != false {
+		t.Error("Expected first PR to not be merged")
+	}
+
+	pr2 := nodes[1].(map[string]interface{})
+	if pr2["merged"] != true {
+		t.Error("Expected second PR to be merged")
+	}
+}
+
+func TestRepositoryPullRequestsQuery_WithStateFilter(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/repos/octocat/repo" {
+			mockRepo := github.Repository{
+				ID:       12345,
+				Name:     "repo",
+				FullName: "octocat/repo",
+				Owner: github.User{
+					ID:    583231,
+					Login: "octocat",
+				},
+			}
+			json.NewEncoder(w).Encode(mockRepo)
+		} else if r.URL.Path == "/repos/octocat/repo/pulls" {
+			// Verify state filter in query parameters
+			state := r.URL.Query().Get("state")
+			if state != "open" {
+				t.Errorf("Expected state filter 'open', got '%s'", state)
+			}
+
+			mockPRs := []*github.PullRequest{
+				{
+					ID:        1,
+					Number:    20,
+					Title:     "Open PR",
+					State:     "open",
+					HTMLURL:   "https://github.com/octocat/repo/pull/20",
+					User:      github.User{ID: 1, Login: "user1"},
+					CreatedAt: "2023-01-01T00:00:00Z",
+					UpdatedAt: "2023-01-02T00:00:00Z",
+					Merged:    false,
+				},
+			}
+			json.NewEncoder(w).Encode(mockPRs)
+		}
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	query := `
+		query {
+			repository(owner: "octocat", name: "repo") {
+				pullRequests(first: 10, states: [OPEN]) {
+					nodes {
+						number
+						title
+						state
+						merged
+					}
+				}
+			}
+		}
+	`
+
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	repo := data["repository"].(map[string]interface{})
+	prs := repo["pullRequests"].(map[string]interface{})
+	nodes := prs["nodes"].([]interface{})
+
+	if len(nodes) != 1 {
+		t.Fatalf("Expected 1 PR, got %d", len(nodes))
+	}
+
+	pr := nodes[0].(map[string]interface{})
+	if pr["state"] != "OPEN" {
+		t.Errorf("Expected all PRs to be OPEN, got %v", pr["state"])
+	}
+}
+
+func TestRepositoryIssuesQuery_WithPagination(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/repos/octocat/repo" {
+			mockRepo := github.Repository{
+				ID:       12345,
+				Name:     "repo",
+				FullName: "octocat/repo",
+				Owner: github.User{
+					ID:    583231,
+					Login: "octocat",
+				},
+			}
+			json.NewEncoder(w).Encode(mockRepo)
+		} else if r.URL.Path == "/repos/octocat/repo/issues" {
+			page := r.URL.Query().Get("page")
+
+			if page == "2" {
+				// Second page
+				mockIssues := []*github.Issue{
+					{
+						ID:        3,
+						Number:    12,
+						Title:     "Third issue",
+						State:     "open",
+						HTMLURL:   "https://github.com/octocat/repo/issues/12",
+						User:      github.User{ID: 1, Login: "user1"},
+						CreatedAt: "2023-01-05T00:00:00Z",
+						UpdatedAt: "2023-01-06T00:00:00Z",
+					},
+				}
+				json.NewEncoder(w).Encode(mockIssues)
+			} else {
+				// First page
+				mockIssues := []*github.Issue{
+					{
+						ID:        1,
+						Number:    10,
+						Title:     "First issue",
+						State:     "open",
+						HTMLURL:   "https://github.com/octocat/repo/issues/10",
+						User:      github.User{ID: 1, Login: "user1"},
+						CreatedAt: "2023-01-01T00:00:00Z",
+						UpdatedAt: "2023-01-02T00:00:00Z",
+					},
+				}
+				w.Header().Set("Link", "<http://test/repos/octocat/repo/issues?page=2>; rel=\"next\"")
+				json.NewEncoder(w).Encode(mockIssues)
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := github.NewClient("test-token")
+	client.SetBaseURL(server.URL)
+
+	schema, err := NewSchema(client)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Query first page
+	query := `
+		query {
+			repository(owner: "octocat", name: "repo") {
+				issues(first: 1) {
+					pageInfo {
+						hasNextPage
+						endCursor
+					}
+					nodes {
+						number
+						title
+					}
+				}
+			}
+		}
+	`
+
+	ctx := context.WithValue(context.Background(), githubClientKey, client)
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	repo := data["repository"].(map[string]interface{})
+	issues := repo["issues"].(map[string]interface{})
+	pageInfo := issues["pageInfo"].(map[string]interface{})
+	nodes := issues["nodes"].([]interface{})
+
+	if pageInfo["hasNextPage"] != true {
+		t.Error("Expected hasNextPage to be true on first page")
+	}
+
+	if len(nodes) != 1 {
+		t.Fatalf("Expected 1 issue on first page, got %d", len(nodes))
+	}
+
+	issue1 := nodes[0].(map[string]interface{})
+	if issue1["number"] != 10 {
+		t.Errorf("Expected issue number 10, got %v", issue1["number"])
+	}
+
+	// Get cursor and query second page
+	endCursor := pageInfo["endCursor"].(string)
+
+	query2 := `
+		query($cursor: String!) {
+			repository(owner: "octocat", name: "repo") {
+				issues(first: 1, after: $cursor) {
+					pageInfo {
+						hasNextPage
+						hasPreviousPage
+					}
+					nodes {
+						number
+						title
+					}
+				}
+			}
+		}
+	`
+
+	result2 := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query2,
+		VariableValues: map[string]interface{}{
+			"cursor": endCursor,
+		},
+		Context: ctx,
+	})
+
+	if len(result2.Errors) > 0 {
+		t.Fatalf("GraphQL errors on second page: %v", result2.Errors)
+	}
+
+	data2 := result2.Data.(map[string]interface{})
+	repo2 := data2["repository"].(map[string]interface{})
+	issues2 := repo2["issues"].(map[string]interface{})
+	pageInfo2 := issues2["pageInfo"].(map[string]interface{})
+	nodes2 := issues2["nodes"].([]interface{})
+
+	if pageInfo2["hasNextPage"] != false {
+		t.Error("Expected hasNextPage to be false on last page")
+	}
+	if pageInfo2["hasPreviousPage"] != true {
+		t.Error("Expected hasPreviousPage to be true on second page")
+	}
+
+	if len(nodes2) != 1 {
+		t.Fatalf("Expected 1 issue on second page, got %d", len(nodes2))
+	}
+
+	issue2 := nodes2[0].(map[string]interface{})
+	if issue2["number"] != 12 {
+		t.Errorf("Expected issue number 12 on second page, got %v", issue2["number"])
+	}
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

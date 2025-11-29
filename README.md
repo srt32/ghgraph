@@ -10,9 +10,11 @@ This project clones the GitHub GraphQL API interface but translates all queries 
 
 - **GraphQL Interface**: Exposes a GraphQL API that matches GitHub's schema
 - **REST Backend**: Translates all queries to GitHub REST API v3 calls
-- **Stateless**: No database or persistent state required
-- **Viewer Query**: Currently supports the `viewer` query with scalar fields
+- **Intelligent Caching**: Token-scoped in-memory caching with TTL for improved performance
+- **Pagination Support**: Cursor-based pagination for repositories, issues, and pull requests
+- **State Filtering**: Filter issues and pull requests by state (OPEN, CLOSED, MERGED)
 - **Type-Safe**: Written in Go with full type safety
+- **Multi-Tenant**: Isolated cache per user token for security
 
 ## Currently Supported
 
@@ -56,6 +58,20 @@ The following fields are supported on the `Repository` type:
 - `forkCount` (Int!) - Number of forks
 - `defaultBranchRef` (String) - Name of the default branch
 - `owner` (User!) - The User who owns the repository
+- `issues` (IssueConnection!) - A paginated list of issues for the repository
+  - Arguments:
+    - `first` (Int) - Number of issues to return (forward pagination)
+    - `after` (String) - Cursor to start after for forward pagination
+    - `last` (Int) - Number of issues to return (backward pagination)
+    - `before` (String) - Cursor to start before for backward pagination
+    - `states` ([IssueState]) - Filter by issue states (OPEN, CLOSED)
+- `pullRequests` (PullRequestConnection!) - A paginated list of pull requests for the repository
+  - Arguments:
+    - `first` (Int) - Number of PRs to return (forward pagination)
+    - `after` (String) - Cursor to start after for forward pagination
+    - `last` (Int) - Number of PRs to return (backward pagination)
+    - `before` (String) - Cursor to start before for backward pagination
+    - `states` ([PullRequestState]) - Filter by PR states (OPEN, CLOSED, MERGED)
 
 ### Organization Fields
 
@@ -69,6 +85,33 @@ The following fields are supported on the `Organization` type:
 - `url` (String!) - The HTTP URL for this organization
 - `email` (String) - The organization's public email
 - `location` (String) - The organization's location
+
+### Issue Fields
+
+The following fields are supported on the `Issue` type:
+
+- `id` (String!) - The issue's ID
+- `number` (Int!) - The issue number in the repository
+- `title` (String!) - The title of the issue
+- `body` (String) - The body content of the issue
+- `state` (IssueState!) - The state of the issue (OPEN, CLOSED)
+- `url` (String!) - The HTTP URL for this issue
+- `author` (User!) - The user who created the issue
+- `createdAt` (String!) - When the issue was created
+
+### PullRequest Fields
+
+The following fields are supported on the `PullRequest` type:
+
+- `id` (String!) - The pull request's ID
+- `number` (Int!) - The pull request number in the repository
+- `title` (String!) - The title of the pull request
+- `body` (String) - The body content of the pull request
+- `state` (PullRequestState!) - The state of the pull request (OPEN, CLOSED, MERGED)
+- `url` (String!) - The HTTP URL for this pull request
+- `author` (User!) - The user who created the pull request
+- `createdAt` (String!) - When the pull request was created
+- `merged` (Boolean!) - Whether the pull request was merged
 
 ### Pagination Types
 
@@ -100,6 +143,42 @@ Represents an edge in a repository connection:
 
 - `cursor` (String!) - Cursor for this edge
 - `node` (Repository) - The repository at this edge
+
+#### IssueConnection
+
+Represents a paginated list of issues:
+
+- `edges` ([IssueEdge]) - List of edges containing issues and cursors
+- `nodes` ([Issue]) - Direct list of issues
+- `pageInfo` (PageInfo!) - Pagination information
+- `totalCount` (Int!) - Count of issues in the current page
+
+**Note:** `totalCount` returns the number of items in the current page, not the total count across all pages.
+
+#### IssueEdge
+
+Represents an edge in an issue connection:
+
+- `cursor` (String!) - Cursor for this edge
+- `node` (Issue) - The issue at this edge
+
+#### PullRequestConnection
+
+Represents a paginated list of pull requests:
+
+- `edges` ([PullRequestEdge]) - List of edges containing pull requests and cursors
+- `nodes` ([PullRequest]) - Direct list of pull requests
+- `pageInfo` (PageInfo!) - Pagination information
+- `totalCount` (Int!) - Count of pull requests in the current page
+
+**Note:** `totalCount` returns the number of items in the current page, not the total count across all pages.
+
+#### PullRequestEdge
+
+Represents an edge in a pull request connection:
+
+- `cursor` (String!) - Cursor for this edge
+- `node` (PullRequest) - The pull request at this edge
 
 ## Installation
 
@@ -243,6 +322,51 @@ curl -X POST http://localhost:8080/graphql \
   }'
 ```
 
+#### Example: Query Repository Issues
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ repository(owner: \"facebook\", name: \"react\") { name issues(first: 5, states: [OPEN]) { totalCount pageInfo { hasNextPage endCursor } nodes { number title state author { login } createdAt } } } }"
+  }'
+```
+
+#### Example: Query Repository Pull Requests
+
+```bash
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ repository(owner: \"facebook\", name: \"react\") { name pullRequests(first: 10, states: [MERGED]) { totalCount nodes { number title state merged author { login } } } } }"
+  }'
+```
+
+#### Example: Paginate Through Issues
+
+```bash
+# First page
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "{ repository(owner: \"octocat\", name: \"hello-world\") { issues(first: 2) { pageInfo { hasNextPage endCursor } edges { cursor node { number title state } } } } }"
+  }'
+
+# Next page (use endCursor from previous response)
+curl -X POST http://localhost:8080/graphql \
+  -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query($cursor: String!) { repository(owner: \"octocat\", name: \"hello-world\") { issues(first: 2, after: $cursor) { pageInfo { hasNextPage hasPreviousPage endCursor } nodes { number title } } } }",
+    "variables": {
+      "cursor": "Mg=="
+    }
+  }'
+```
+
 ### Health Check
 
 ```bash
@@ -284,7 +408,8 @@ go test -v ./...
 
 ```
 /cmd/server              - Main application entry point
-/internal/github         - GitHub REST API client
+/internal/cache          - Token-scoped TTL caching layer
+/internal/github         - GitHub REST API client with caching
 /internal/graphql        - GraphQL schema and resolvers
 /internal/server         - HTTP server and request handling
 /integration_test.go     - Integration tests against real GitHub API
@@ -299,6 +424,38 @@ go test -v ./...
 5. REST API responses are mapped back to GraphQL response format
 6. Response is returned to client
 
+### Caching
+
+The proxy implements an intelligent in-memory caching layer to reduce GitHub API calls and improve performance:
+
+#### Features
+
+- **Token-Scoped Caching**: Each user's token has isolated cache storage for security and multi-tenancy
+- **TTL-Based Expiration**: Cache entries automatically expire after 5 minutes
+- **Automatic Cleanup**: Background goroutine removes expired entries
+- **Thread-Safe**: Uses sync.Map for concurrent access
+- **Privacy**: Tokens are SHA256-hashed (first 8 bytes) for cache key generation
+
+#### What Gets Cached
+
+The following GitHub REST API responses are cached:
+- Repository issues
+- Pull requests
+- User repositories (future)
+
+#### Cache Keys
+
+Cache keys are structured as: `<token-hash>:<resource-type>:<owner>/<repo>:<state>:page<N>:per<M>`
+
+Example: `a1b2c3d4:issues:facebook/react:open:page1:per30`
+
+#### Benefits
+
+- Reduces redundant API calls
+- Stays within GitHub's rate limits
+- Improves response times for repeated queries
+- Supports multi-tenant usage with token isolation
+
 ## Project Structure
 
 ```
@@ -307,8 +464,11 @@ ghgraph/
 │   └── server/
 │       └── main.go              # Application entry point
 ├── internal/
+│   ├── cache/
+│   │   ├── cache.go             # Token-scoped TTL cache
+│   │   └── cache_test.go        # Cache tests
 │   ├── github/
-│   │   ├── client.go            # REST API client
+│   │   ├── client.go            # REST API client with caching
 │   │   └── client_test.go       # Client tests
 │   ├── graphql/
 │   │   ├── schema.go            # GraphQL schema definition
@@ -328,13 +488,16 @@ ghgraph/
 - [x] Add support for nested queries (e.g., `viewer.repositories`, `user.repositories`)
 - [x] Implement cursor-based pagination for list fields
 - [x] Support for repository connections with edges, nodes, and pageInfo
+- [x] Add paginated fields for issues and pull requests (`repository.issues`, `repository.pullRequests`)
+- [x] Implement token-scoped request caching with TTL
+- [x] Add state filtering for issues and pull requests
 
 ### Next Steps
 
-- [ ] Add more paginated fields (e.g., `user.followers`, `repository.issues`)
-- [ ] Support mutations
-- [ ] Add request caching
+- [ ] Add more paginated fields (e.g., `user.followers`, `organization.repositories`)
+- [ ] Support mutations (e.g., creating issues, commenting on PRs)
 - [ ] Implement rate limiting
+- [ ] Add support for comments on issues and pull requests
 
 ### Future Enhancements
 
